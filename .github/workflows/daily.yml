@@ -1,0 +1,31 @@
+name: Daily price check
+
+on:
+  schedule:
+    - cron: "0 0 * * *"   # 毎日 9:00 JST
+  workflow_dispatch:       # 手動実行ボタン
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    env:
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python fetch_price.py
+      - name: Commit data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/prices.csv
+          git diff --cached --quiet || git commit -m "price: $(date -u +%F)"
+          git push
+      - name: Notify phone (ntfy)
+        if: env.NTFY_TOPIC != ''
+        run: python notify.py
