@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>価格推移グラフ</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root { --bg:#f7f7f5; --card:#fff; --text:#1d1d1f; --muted:#6e6e73; --line:#0f766e; --grid:#e5e5e5; --up:#c2410c; --down:#1d4ed8; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#141414; --card:#1e1e1e; --text:#f2f2f2; --muted:#a1a1a6; --line:#2dd4bf; --grid:#333; --up:#fb923c; --down:#60a5fa; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif; }
+  main { max-width:880px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:1.25rem; margin:0 0 4px; }
+  .sub { color:var(--muted); font-size:.85rem; margin:0 0 20px; word-break:break-all; }
+  .sub a { color:inherit; }
+  .card { background:var(--card); border-radius:12px; padding:20px; margin-bottom:16px; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; }
+  .stat .k { color:var(--muted); font-size:.8rem; }
+  .stat .v { font-size:1.4rem; font-weight:600; font-variant-numeric:tabular-nums; }
+  .up { color:var(--up); } .down { color:var(--down); }
+  .chart-wrap { position:relative; height:340px; }
+  table { width:100%; border-collapse:collapse; font-size:.9rem; font-variant-numeric:tabular-nums; }
+  th, td { padding:6px 8px; border-bottom:1px solid var(--grid); text-align:right; }
+  th:first-child, td:first-child { text-align:left; }
+  th { color:var(--muted); font-weight:500; }
+  select { font-size:1rem; padding:4px 8px; margin-bottom:16px; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">価格推移</h1>
+  <p class="sub" id="sub"></p>
+  <select id="picker" hidden></select>
+  <div class="card stats" id="stats"></div>
+  <div class="card"><div class="chart-wrap"><canvas id="chart"></canvas></div></div>
+  <div class="card"><table><thead><tr><th>日付</th><th>価格</th><th>前日比</th><th>在庫</th></tr></thead><tbody id="rows"></tbody></table></div>
+</main>
+<script>
+const fmt = n => n.toLocaleString("ja-JP");
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+let chart;
+
+function parseCSV(text) {
+  const [head, ...lines] = text.trim().split(/\r?\n/);
+  const keys = head.split(",");
+  return lines.map(l => Object.fromEntries(l.split(",").map((v, i) => [keys[i], v])));
+}
+
+function render(all, pid) {
+  const rows = all.filter(r => r.product_id === pid);
+  const prices = rows.map(r => Number(r.price));
+  const last = prices.at(-1), first = prices[0];
+  const diff = last - first;
+  document.getElementById("title").textContent = `${rows.at(-1).name} の価格推移`;
+  const url = `https://treasureofgems.com/product/${pid}`;
+  document.getElementById("sub").innerHTML = `<a href="${url}" target="_blank" rel="noopener">${url}</a> ・ 毎日9:00(JST)自動更新`;
+  document.getElementById("stats").innerHTML = [
+    ["現在価格", fmt(last)],
+    ["記録開始からの変動", `<span class="${diff > 0 ? "up" : diff < 0 ? "down" : ""}">${diff > 0 ? "+" : ""}${fmt(diff)}</span>`],
+    ["最高 / 最安", `${fmt(Math.max(...prices))} / ${fmt(Math.min(...prices))}`],
+    ["記録日数", `${rows.length}日`],
+  ].map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+
+  document.getElementById("rows").innerHTML = rows.slice().reverse().map((r, i, arr) => {
+    const prev = arr[i + 1] ? Number(arr[i + 1].price) : null;
+    const d = prev === null ? "" : Number(r.price) - prev;
+    const cls = d > 0 ? "up" : d < 0 ? "down" : "";
+    return `<tr><td>${r.date}</td><td>${fmt(Number(r.price))}</td><td class="${cls}">${d === "" ? "—" : (d > 0 ? "+" : "") + fmt(d)}</td><td>${r.stock}</td></tr>`;
+  }).join("");
+
+  chart?.destroy();
+  chart = new Chart(document.getElementById("chart"), {
+    type: "line",
+    data: { labels: rows.map(r => r.date), datasets: [{ data: prices, borderColor: css("--line"), backgroundColor: css("--line"), borderWidth: 2, pointRadius: rows.length > 60 ? 0 : 3, stepped: true }] },
+    options: {
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => fmt(c.parsed.y) } } },
+      scales: {
+        x: { ticks: { color: css("--muted"), maxTicksLimit: 8 }, grid: { color: css("--grid") } },
+        y: { ticks: { color: css("--muted"), callback: v => fmt(v) }, grid: { color: css("--grid") }, grace: "10%" },
+      },
+    },
+  });
+}
+
+fetch("data/prices.csv", { cache: "no-store" }).then(r => r.text()).then(text => {
+  const all = parseCSV(text);
+  const ids = [...new Set(all.map(r => r.product_id))];
+  const picker = document.getElementById("picker");
+  if (ids.length > 1) {
+    picker.hidden = false;
+    picker.innerHTML = ids.map(id => `<option value="${id}">${all.findLast(r => r.product_id === id).name}</option>`).join("");
+    picker.onchange = () => render(all, picker.value);
+  }
+  render(all, ids[0]);
+});
+</script>
+</body>
+</html>
