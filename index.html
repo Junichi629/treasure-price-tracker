@@ -93,9 +93,16 @@ fetch("data/prices.csv", { cache: "no-store" }).then(r => r.text()).then(text =>
   if (ids.length > 1) {
     picker.hidden = false;
     picker.innerHTML = ids.map(id => `<option value="${id}">${all.findLast(r => r.product_id === id).name}</option>`).join("");
-    picker.onchange = () => render(all, picker.value);
+    picker.onchange = () => {
+      history.replaceState(null, "", `?id=${picker.value}`);
+      render(all, picker.value);
+    };
   }
-  render(all, ids[0]);
+  // ?id=商品ID で特定の商品のグラフを直接開ける（共有用）
+  const want = new URLSearchParams(location.search).get("id");
+  const first = ids.includes(want) ? want : ids[0];
+  picker.value = first;
+  render(all, first);
 });
 </script>
 </body>
