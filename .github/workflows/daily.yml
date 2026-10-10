@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      PRODUCT_IDS: "2087517284863156226,2087516465723973633"
+      NOTIFY_ON_CHANGE_IDS: "2087516465723973633"   # 価格が変わった日だけ通知する商品
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
