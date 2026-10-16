@@ -6,9 +6,9 @@
 <title>価格推移グラフ</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
-  :root { --bg:#f7f7f5; --card:#fff; --text:#1d1d1f; --muted:#6e6e73; --line:#0f766e; --grid:#e5e5e5; --up:#c2410c; --down:#1d4ed8; }
+  :root { --bg:#f7f7f5; --card:#fff; --text:#1d1d1f; --muted:#6e6e73; --line:#0f766e; --grid:#e5e5e5; --up:#c2410c; --down:#1d4ed8; --fx:#b45309; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg:#141414; --card:#1e1e1e; --text:#f2f2f2; --muted:#a1a1a6; --line:#2dd4bf; --grid:#333; --up:#fb923c; --down:#60a5fa; }
+    :root { --bg:#141414; --card:#1e1e1e; --text:#f2f2f2; --muted:#a1a1a6; --line:#2dd4bf; --grid:#333; --up:#fb923c; --down:#60a5fa; --fx:#fbbf24; }
   }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif; }
@@ -36,12 +36,24 @@
   <select id="picker" hidden></select>
   <div class="card stats" id="stats"></div>
   <div class="card"><div class="chart-wrap"><canvas id="chart"></canvas></div></div>
-  <div class="card"><table><thead><tr><th>日付</th><th>価格</th><th>前日比</th><th>在庫</th></tr></thead><tbody id="rows"></tbody></table></div>
+  <div class="card"><table><thead><tr><th>日付</th><th>価格</th><th>前日比</th><th>ドル円</th><th>在庫</th></tr></thead><tbody id="rows"></tbody></table></div>
 </main>
 <script>
 const fmt = n => n.toLocaleString("ja-JP");
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 let chart;
+let fx = {};  // 日付 → ドル円レート（土日祝は直前の営業日の値）
+
+// 欧州中央銀行の参考レート（Frankfurter）からドル円を取得
+async function loadFX(from) {
+  const start = new Date(from); start.setDate(start.getDate() - 7);
+  const res = await fetch(`https://api.frankfurter.dev/v1/${start.toISOString().slice(0, 10)}..?base=USD&symbols=JPY`);
+  return Object.fromEntries(Object.entries((await res.json()).rates).map(([d, r]) => [d, r.JPY]));
+}
+function fxOn(date) {
+  const days = Object.keys(fx).filter(d => d <= date).sort();
+  return days.length ? fx[days.at(-1)] : null;
+}
 
 function parseCSV(text) {
   const [head, ...lines] = text.trim().split(/\r?\n/);
@@ -62,32 +74,45 @@ function render(all, pid) {
     ["記録開始からの変動", `<span class="${diff > 0 ? "up" : diff < 0 ? "down" : ""}">${diff > 0 ? "+" : ""}${fmt(diff)}</span>`],
     ["最高 / 最安", `${fmt(Math.max(...prices))} / ${fmt(Math.min(...prices))}`],
     ["記録日数", `${rows.length}日`],
+    ...(fxOn(rows.at(-1).date) ? [["ドル円（最新）", `${fxOn(rows.at(-1).date).toFixed(2)}円`]] : []),
   ].map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
 
   document.getElementById("rows").innerHTML = rows.slice().reverse().map((r, i, arr) => {
     const prev = arr[i + 1] ? Number(arr[i + 1].price) : null;
     const d = prev === null ? "" : Number(r.price) - prev;
     const cls = d > 0 ? "up" : d < 0 ? "down" : "";
-    return `<tr><td>${r.date}</td><td>${fmt(Number(r.price))}</td><td class="${cls}">${d === "" ? "—" : (d > 0 ? "+" : "") + fmt(d)}</td><td>${r.stock}</td></tr>`;
+    return `<tr><td>${r.date}</td><td>${fmt(Number(r.price))}</td><td class="${cls}">${d === "" ? "—" : (d > 0 ? "+" : "") + fmt(d)}</td><td>${fxOn(r.date)?.toFixed(2) ?? "—"}</td><td>${r.stock}</td></tr>`;
   }).join("");
 
   chart?.destroy();
   chart = new Chart(document.getElementById("chart"), {
     type: "line",
-    data: { labels: rows.map(r => r.date), datasets: [{ data: prices, borderColor: css("--line"), backgroundColor: css("--line"), borderWidth: 2, pointRadius: rows.length > 60 ? 0 : 3, stepped: true }] },
+    data: {
+      labels: rows.map(r => r.date),
+      datasets: [
+        { label: "価格（左）", data: prices, yAxisID: "y", borderColor: css("--line"), backgroundColor: css("--line"), borderWidth: 2, pointRadius: rows.length > 60 ? 0 : 3, stepped: true },
+        { label: "ドル円（右）", data: rows.map(r => fxOn(r.date)), yAxisID: "y1", borderColor: css("--fx"), backgroundColor: css("--fx"), borderWidth: 2, borderDash: [5, 4], pointRadius: 0, hidden: !Object.keys(fx).length },
+      ],
+    },
     options: {
       maintainAspectRatio: false,
-      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => fmt(c.parsed.y) } } },
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { labels: { color: css("--muted"), boxHeight: 2 } },
+        tooltip: { callbacks: { label: c => c.datasetIndex ? `ドル円 ${c.parsed.y.toFixed(2)}円` : `価格 ${fmt(c.parsed.y)}` } },
+      },
       scales: {
         x: { ticks: { color: css("--muted"), maxTicksLimit: 8 }, grid: { color: css("--grid") } },
-        y: { ticks: { color: css("--muted"), callback: v => fmt(v) }, grid: { color: css("--grid") }, grace: "10%" },
+        y: { position: "left", ticks: { color: css("--line"), callback: v => fmt(v) }, grid: { color: css("--grid") }, grace: "10%" },
+        y1: { position: "right", display: Object.keys(fx).length > 0, ticks: { color: css("--fx"), callback: v => v.toFixed(1) }, grid: { drawOnChartArea: false }, grace: "5%" },
       },
     },
   });
 }
 
-fetch("data/prices.csv", { cache: "no-store" }).then(r => r.text()).then(text => {
+fetch("data/prices.csv", { cache: "no-store" }).then(r => r.text()).then(async text => {
   const all = parseCSV(text);
+  try { fx = await loadFX(all.map(r => r.date).sort()[0]); } catch { fx = {}; }  // 取れなくても価格グラフは表示
   const ids = [...new Set(all.map(r => r.product_id))];
   const picker = document.getElementById("picker");
   if (ids.length > 1) {
